@@ -6,7 +6,7 @@
 
 #refactor w/ same answer
 def add(num1, num2):
-    ans = num1 + num2
+    ans = num1 * num2
     return ans
 @given(
     num1 = st.integers(min_value=1, max_value=10),
