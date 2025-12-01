@@ -1,6 +1,5 @@
-import version1
-import version2
-from hypothesis import given, strategies as st
+import os
+import subprocess
 
 """
 
@@ -13,48 +12,56 @@ Questions:
 
 def main():
 
-    print("Testing Round 1: Basic Tests")
-    test1through10()
-    print("Passed!\n")
+    link = input("paste your repo link:\n")
+    commit1 = input("input your first commit code:\n")
+    commit2 = input("input your second commit code\n")
 
-    print("Testing Round 2: Negatives")
-    testNeg1through10()
-    print("Passed!\n")
+    compareCommits(link, commit1, commit2)
+def compareCommits(link, commit1, commit2):
+
+    #subprocess or bash
+    # git clone <repo> Version1
+    # git clone <repo> Version2
+    # CD version1
+    # git checkout <commit1>
+    # CD..
+    # CD version2
+    # git checkout <commit2>
+
+    baseDirectory = os.getcwd()
+
+    """Version1"""
+
+    print("\n===========================\ncloning first commit...")
+
+    #clone!!!
+    subprocess.run("git clone " + link + " Version1")
+    #save base directory so we can go back
+    #CD into version1
+    os.chdir("Version1")
+    #checkout first commit
+    subprocess.run("git checkout " + commit1)
+
+    #go back
+    os.chdir(baseDirectory)
 
 
-    print("Testing Round 3: All nums")
-    testGen()
-    print("Passed!\n")
-    print("All tests passed :3\nRefactor is functionally the same")
+    """Version2"""
+
+    print("\n===========================\ncloning second commit")
+
+    subprocess.run("git clone " + link + " Version2")
+    #CD into version2
+    os.chdir("Version2")
+    # checkout second commit
+    subprocess.run("git checkout " + commit2)
+    # go back
+    os.chdir(baseDirectory)
 
 
-@given(
-        num1=st.integers(min_value=1, max_value=10),
-        num2=st.integers(min_value=1, max_value=10))
-def test1through10(num1, num2):
-    ans1 = version1.add(num1, num2)
-    ans2 = version2.add(num1, num2)
+    import Testing
 
-    assert(ans1 == ans2)
-
-@given(
-        num1=st.integers(min_value=-10, max_value=-1),
-        num2=st.integers(min_value=-10, max_value=-1))
-def testNeg1through10(num1, num2):
-    ans1 = version1.add(num1, num2)
-    ans2 = version2.add(num1, num2)
-
-    assert(ans1 == ans2)
-
-@given(
-        num1=st.integers(),
-        num2=st.integers())
-def testGen(num1, num2):
-    ans1 = version1.add(num1, num2)
-    ans2 = version2.add(num1, num2)
-
-    assert(ans1 == ans2)
-
+    Testing.beginTests()
 
 
 
