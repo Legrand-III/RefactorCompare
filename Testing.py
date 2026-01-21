@@ -1,10 +1,20 @@
 from hypothesis import given, strategies as st
+import os
 from Version1.Math import add as a1
 from Version2.Math import add as a2
+import Version1 as v1
 
 def beginTests():
 
-    print("this is where they would input their stuff but like... idk bruh\n===========")
+    ###print("this is where they would input their stuff but like... idk bruh\n===========")
+    path = input("please paste the path to the first version of your function:\n")
+
+    #format the string
+    path.replace("/", ".", -1)
+    #remove .py
+    path.replace(".py","",1)
+
+
     test()
 
 def test():
