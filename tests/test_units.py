@@ -102,3 +102,30 @@ def test_checkout_keep_leaves_files(make_repo):
     finally:
         import shutil
         shutil.rmtree(workdir)
+
+
+# ---------- runner.VersionRunner ----------
+
+def test_runner_times_out_then_keeps_working(tmp_path):
+    from runner import VersionRunner
+
+    (tmp_path / "m.py").write_text(
+        "def f(x):\n    while x < 0:\n        pass\n    return x * 2\n"
+    )
+    with VersionRunner(tmp_path, "m.py", "f", "V", timeout=0.5) as run:
+        assert run((3,), {}) == ("returned", 6)
+        assert run((-1,), {}) == ("timed out", 0.5)
+        assert run((4,), {}) == ("returned", 8)       # a fresh worker took over
+
+
+def test_runner_reports_exception_by_name_and_crash(tmp_path):
+    from runner import VersionRunner
+
+    (tmp_path / "m.py").write_text(
+        "import os\n"
+        "def f(x):\n    if x == 0:\n        os._exit(3)\n    return 1 // (x - 1)\n"
+    )
+    with VersionRunner(tmp_path, "m.py", "f", "V", timeout=5) as run:
+        assert run((1,), {}) == ("raised", "ZeroDivisionError")
+        assert run((0,), {}) == ("crashed", 3)
+        assert run((2,), {}) == ("returned", 1)

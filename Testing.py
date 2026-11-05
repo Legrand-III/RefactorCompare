@@ -6,12 +6,13 @@ raise the same kind of exception). On a mismatch Hypothesis shrinks the input
 to the simplest one it can find that still shows the difference.
 """
 
-import copy
 import inspect
 import math
 import typing
 
 from hypothesis import HealthCheck, given, settings, strategies as st
+
+from runner import call
 
 POSITIONAL = (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
 
@@ -80,14 +81,6 @@ def build_strategies(func, arg_types=None, ask=None):
     return pos_names, pos_strats, kw_strats
 
 
-def call(func, args, kwargs):
-    """Run func and describe what happened, so two runs can be compared."""
-    try:
-        return ("returned", func(*copy.deepcopy(args), **copy.deepcopy(kwargs)))
-    except Exception as exc:
-        return ("raised", type(exc))
-
-
 def same_value(a, b):
     if isinstance(a, float) and isinstance(b, float) and math.isnan(a) and math.isnan(b):
         return True
@@ -103,11 +96,24 @@ def same_outcome(o1, o2):
 
 def describe(outcome):
     kind, value = outcome
-    return f"raised {value.__name__}" if kind == "raised" else f"returned {value!r}"
+    if kind == "raised":
+        return f"raised {getattr(value, '__name__', value)}"
+    if kind == "timed out":
+        return f"did not finish within {value:g}s (infinite loop?)"
+    if kind == "crashed":
+        return f"crashed its process (exit code {value})"
+    return f"returned {value!r}"
 
 
-def compare(func1, func2, arg_types=None, ask=None, max_examples=500):
-    """Return (equivalent: bool, message: str)."""
+def compare(func1, func2, arg_types=None, ask=None, max_examples=500, run1=None, run2=None):
+    """Return (equivalent: bool, message: str).
+
+    `run1` / `run2` are optional callables (args, kwargs) -> outcome used to
+    run each version, e.g. a runner.VersionRunner that runs it in a separate
+    process with a time limit. By default the functions are called directly.
+    """
+    run1 = run1 or (lambda args, kwargs: call(func1, args, kwargs))
+    run2 = run2 or (lambda args, kwargs: call(func2, args, kwargs))
     pos_names, pos_strats, kw_strats = build_strategies(func1, arg_types, ask)
 
     sig2_names = list(inspect.signature(func2).parameters)
@@ -129,8 +135,8 @@ def compare(func1, func2, arg_types=None, ask=None, max_examples=500):
     )
     @given(args=st.tuples(*pos_strats), kwargs=st.fixed_dictionaries(kw_strats))
     def versions_agree(args, kwargs):
-        o1 = call(func1, args, kwargs)
-        o2 = call(func2, args, kwargs)
+        o1 = run1(args, kwargs)
+        o2 = run2(args, kwargs)
         if not same_outcome(o1, o2):
             shown = [f"{n}={v!r}" for n, v in zip(pos_names, args)]
             shown += [f"{n}={v!r}" for n, v in kwargs.items()]

@@ -137,3 +137,17 @@ def test_file_that_fails_to_import(make_repo, capsys):
     )
     assert run(repo, "calc.py", "f") == 2
     assert "Version2 failed" in capsys.readouterr().err
+
+
+# ---------- functions that hang ----------
+
+def test_infinite_loop_is_caught_instead_of_hanging(make_repo, capsys):
+    repo = make_repo(
+        {"calc.py": "def absval(x: int) -> int:\n    return abs(x)\n"},
+        {"calc.py": "def absval(x: int) -> int:\n"
+                    "    while x < 0:\n        pass\n    return x\n"},
+    )
+    assert run(repo, "calc.py", "absval", "--timeout", "0.5") == 1
+    out = capsys.readouterr().out
+    assert "x=-1" in out
+    assert "Version2 did not finish within 0.5s" in out
