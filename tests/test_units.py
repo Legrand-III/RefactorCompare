@@ -118,14 +118,39 @@ def test_runner_times_out_then_keeps_working(tmp_path):
         assert run((4,), {}) == ("returned", 8)       # a fresh worker took over
 
 
-def test_runner_reports_exception_by_name_and_crash(tmp_path):
+def test_runner_reports_exceptions_exits_and_crashes(tmp_path):
     from runner import VersionRunner
 
     (tmp_path / "m.py").write_text(
-        "import os\n"
-        "def f(x):\n    if x == 0:\n        os._exit(3)\n    return 1 // (x - 1)\n"
+        "import os, sys\n"
+        "def f(x):\n"
+        "    if x == 0:\n        os._exit(3)\n"
+        "    if x == 5:\n        sys.exit(7)\n"
+        "    return 1 // (x - 1)\n"
     )
     with VersionRunner(tmp_path, "m.py", "f", "V", timeout=5) as run:
         assert run((1,), {}) == ("raised", "ZeroDivisionError")
+        assert run((5,), {}) == ("exited", 7)
         assert run((0,), {}) == ("crashed", 3)
         assert run((2,), {}) == ("returned", 1)
+
+
+def test_runner_reports_parameters(tmp_path):
+    from runner import VersionRunner, decode_hint
+
+    (tmp_path / "m.py").write_text("def f(a: int, b=2, *rest, c: str):\n    pass\n")
+    with VersionRunner(tmp_path, "m.py", "f", "V", timeout=5) as run:
+        params = {p["name"]: p for p in run.parameters}
+    assert decode_hint(params["a"]["hint"]) is int
+    assert params["b"]["has_default"] and params["b"]["hint"] is None
+    assert params["rest"]["kind"] == "var"
+    assert params["c"]["kind"] == "keyword"
+
+
+def test_runner_reports_sys_exit_during_import(tmp_path):
+    from loader import LoadError
+    from runner import VersionRunner
+
+    (tmp_path / "m.py").write_text("import sys\nsys.exit(4)\ndef f(): pass\n")
+    with pytest.raises(LoadError, match="sys.exit"):
+        VersionRunner(tmp_path, "m.py", "f", "V", timeout=5)

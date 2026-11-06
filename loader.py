@@ -1,10 +1,9 @@
-"""Import one function from one version of the code, isolated from the other.
+"""Import one function from one version of the code.
 
-Both versions usually contain modules with the same names (e.g. both have
-`Math.py` or `utils.py`). A plain `import` would cache the first one in
-sys.modules and silently hand it to the second version too, so each file is
-loaded under a unique module name and any modules it imports from its own
-checkout are removed from the cache again afterwards.
+Meant to run inside that version's own worker process (see runner.py), so
+there is no need to keep the two versions' modules apart here: each process
+has its own module cache, and the version's folders can stay on sys.path for
+imports made later, e.g. inside the function body.
 """
 
 import importlib.util
@@ -14,14 +13,6 @@ from pathlib import Path
 
 class LoadError(RuntimeError):
     pass
-
-
-def _is_inside(path, root):
-    try:
-        Path(path).resolve().relative_to(root)
-        return True
-    except ValueError:
-        return False
 
 
 def load_function(version_root, file_path, func_name, tag):
@@ -35,28 +26,15 @@ def load_function(version_root, file_path, func_name, tag):
     if not full.is_file():
         raise LoadError(f"{file_path} does not exist in {tag}")
 
-    module_name = f"_refactorcompare_{tag}_{full.stem}"
-    extra_paths = [str(full.parent), str(root)]
-    modules_before = set(sys.modules)
-    sys.path[:0] = extra_paths
+    sys.path[:0] = [str(full.parent), str(root)]
+    module_name = f"_refactorcompare_{full.stem}"
+    spec = importlib.util.spec_from_file_location(module_name, full)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
     try:
-        spec = importlib.util.spec_from_file_location(module_name, full)
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[module_name] = module
-        try:
-            spec.loader.exec_module(module)
-        except Exception as exc:
-            raise LoadError(f"importing {file_path} from {tag} failed: {exc!r}") from exc
-    finally:
-        for p in extra_paths:
-            sys.path.remove(p)
-        # Forget this version's own modules so the other version imports its own copies.
-        for name in set(sys.modules) - modules_before:
-            if name == module_name:
-                continue
-            mod_file = getattr(sys.modules[name], "__file__", None)
-            if mod_file and _is_inside(mod_file, root):
-                del sys.modules[name]
+        spec.loader.exec_module(module)
+    except Exception as exc:
+        raise LoadError(f"importing {file_path} from {tag} failed: {exc!r}") from exc
 
     obj = module
     for part in func_name.split("."):

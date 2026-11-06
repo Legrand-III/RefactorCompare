@@ -2,19 +2,17 @@
 
 Hypothesis generates inputs from the function's parameter types, calls both
 versions with the same inputs, and checks they give the same result (or both
-raise the same kind of exception). On a mismatch Hypothesis shrinks the input
+raise the same kind of exception). Calls go through runner.py, which runs
+each version in its own process. On a mismatch Hypothesis shrinks the input
 to the simplest one it can find that still shows the difference.
 """
 
-import inspect
 import math
 import typing
 
 from hypothesis import HealthCheck, given, settings, strategies as st
 
-from runner import call
-
-POSITIONAL = (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+from runner import UnusableHint, as_runner, decode_hint
 
 
 class StrategyError(RuntimeError):
@@ -31,32 +29,32 @@ def parse_type(text):
         raise StrategyError(f"could not understand type {text!r}: {exc}") from None
 
 
-def build_strategies(func, arg_types=None, ask=None):
-    """Work out a Hypothesis strategy for every parameter of `func`.
+def build_strategies(parameters, arg_types=None, ask=None):
+    """Work out a Hypothesis strategy for every parameter.
 
-    Types come from, in order: `arg_types` (user overrides), the function's
-    type hints, or `ask(param_name)` if given. Parameters that have a default
-    value and no known type are left out, so the default gets used.
+    `parameters` comes from runner.describe_parameters. Types come from, in
+    order: `arg_types` (user overrides), the function's type hints, or
+    `ask(param_name)` if given. Parameters that have a default value and no
+    known type are left out, so the default gets used.
 
     Returns (positional_names, positional_strategies, keyword_strategies).
     """
     arg_types = dict(arg_types or {})
-    sig = inspect.signature(func)
-    try:
-        hints = typing.get_type_hints(func)
-    except Exception:
-        hints = {}
-
     pos_names, pos_strats, kw_strats = [], [], {}
-    missing = []
-    for name, param in sig.parameters.items():
-        if param.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
+    missing, unusable = [], []
+    for param in parameters:
+        name = param["name"]
+        if param["kind"] == "var":
             continue
+        hint = decode_hint(param["hint"])
         if name in arg_types:
             tp = arg_types.pop(name)
-        elif name in hints:
-            tp = hints[name]
-        elif param.default is not inspect.Parameter.empty:
+        elif isinstance(hint, UnusableHint):
+            unusable.append(f"{name} ({hint})")
+            continue
+        elif hint is not None:
+            tp = hint
+        elif param["has_default"]:
             continue
         elif ask is not None:
             tp = ask(name)
@@ -65,7 +63,7 @@ def build_strategies(func, arg_types=None, ask=None):
             continue
 
         strategy = st.from_type(tp)
-        if param.kind in POSITIONAL:
+        if param["kind"] == "positional":
             pos_names.append(name)
             pos_strats.append(strategy)
         else:
@@ -75,6 +73,11 @@ def build_strategies(func, arg_types=None, ask=None):
         raise StrategyError(
             "no type known for parameter(s) " + ", ".join(missing)
             + ". Add type hints or pass e.g. --arg " + missing[0] + "=int"
+        )
+    if unusable:
+        raise StrategyError(
+            "can't generate inputs from the type hint of " + ", ".join(unusable)
+            + ". Pass a built-in type instead, e.g. --arg " + unusable[0].split()[0] + "=int"
         )
     if arg_types:
         raise StrategyError("--arg given for unknown parameter(s): " + ", ".join(arg_types))
@@ -98,6 +101,8 @@ def describe(outcome):
     kind, value = outcome
     if kind == "raised":
         return f"raised {getattr(value, '__name__', value)}"
+    if kind == "exited":
+        return f"called sys.exit({value!r})"
     if kind == "timed out":
         return f"did not finish within {value:g}s (infinite loop?)"
     if kind == "crashed":
@@ -105,18 +110,16 @@ def describe(outcome):
     return f"returned {value!r}"
 
 
-def compare(func1, func2, arg_types=None, ask=None, max_examples=500, run1=None, run2=None):
+def compare(version1, version2, arg_types=None, ask=None, max_examples=500):
     """Return (equivalent: bool, message: str).
 
-    `run1` / `run2` are optional callables (args, kwargs) -> outcome used to
-    run each version, e.g. a runner.VersionRunner that runs it in a separate
-    process with a time limit. By default the functions are called directly.
+    Each version is a runner.VersionRunner (the function runs in its own
+    process) or a plain function, which is called directly in this process.
     """
-    run1 = run1 or (lambda args, kwargs: call(func1, args, kwargs))
-    run2 = run2 or (lambda args, kwargs: call(func2, args, kwargs))
-    pos_names, pos_strats, kw_strats = build_strategies(func1, arg_types, ask)
+    run1, run2 = as_runner(version1), as_runner(version2)
+    pos_names, pos_strats, kw_strats = build_strategies(run1.parameters, arg_types, ask)
 
-    sig2_names = list(inspect.signature(func2).parameters)
+    sig2_names = [p["name"] for p in run2.parameters]
     if pos_names and sig2_names[: len(pos_names)] != pos_names:
         print(f"Note: parameter names differ: {pos_names} vs {sig2_names}. "
               "Arguments are passed by position.")
