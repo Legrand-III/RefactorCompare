@@ -9,6 +9,11 @@ Example (this repo's own history, where add() has no type hints):
 Any argument left out is asked for interactively, and so is the type of any
 parameter that has no type hint.
 
+Each version is imported and run in its own process, so the versions can't
+share modules or global state, sys.exit() and crashes are reported as
+outcomes, and a call taking longer than --timeout seconds (default 2) is
+stopped and reported as hanging.
+
 Exit code: 0 = same behaviour, 1 = difference found, 2 = error.
 """
 
@@ -17,7 +22,8 @@ import sys
 
 import Testing
 from checkout import GitError, checkout_versions
-from loader import LoadError, load_function
+from loader import LoadError
+from runner import VersionRunner
 
 
 def parse_args(argv):
@@ -34,6 +40,10 @@ def parse_args(argv):
         help="type for a parameter, e.g. --arg x=int --arg items='list[str]'",
     )
     parser.add_argument("--examples", type=int, default=500, help="inputs to try (default 500)")
+    parser.add_argument(
+        "--timeout", type=float, default=2.0,
+        help="seconds one call may take before it counts as hanging (default 2)",
+    )
     parser.add_argument("--keep", action="store_true", help="keep the checked-out versions")
     args = parser.parse_args(argv)
 
@@ -70,14 +80,14 @@ def ask_type(param_name):
 
 def compare_commits(args):
     with checkout_versions(args.repo, args.commit1, args.commit2, keep=args.keep) as (v1, v2):
-        func1 = load_function(v1, args.file, args.function, "Version1")
-        func2 = load_function(v2, args.file, args.function, "Version2")
-
-        ask = ask_type if sys.stdin.isatty() else None
-        print(f"\nComparing {args.file}:{args.function}")
-        same, message = Testing.compare(
-            func1, func2, args.arg_types, ask=ask, max_examples=args.examples
-        )
+        # Each version is imported and run in its own worker process.
+        with VersionRunner(v1, args.file, args.function, "Version1", args.timeout) as run1, \
+             VersionRunner(v2, args.file, args.function, "Version2", args.timeout) as run2:
+            ask = ask_type if sys.stdin.isatty() else None
+            print(f"\nComparing {args.file}:{args.function}")
+            same, message = Testing.compare(
+                run1, run2, args.arg_types, ask=ask, max_examples=args.examples
+            )
 
     print("\n===========================")
     if same:

@@ -137,3 +137,56 @@ def test_file_that_fails_to_import(make_repo, capsys):
     )
     assert run(repo, "calc.py", "f") == 2
     assert "Version2 failed" in capsys.readouterr().err
+
+
+# ---------- each version runs in its own process ----------
+
+def test_infinite_loop_is_caught_instead_of_hanging(make_repo, capsys):
+    repo = make_repo(
+        {"calc.py": "def absval(x: int) -> int:\n    return abs(x)\n"},
+        {"calc.py": "def absval(x: int) -> int:\n"
+                    "    while x < 0:\n        pass\n    return x\n"},
+    )
+    assert run(repo, "calc.py", "absval", "--timeout", "0.5") == 1
+    out = capsys.readouterr().out
+    assert "x=-1" in out
+    assert "Version2 did not finish within 0.5s" in out
+
+
+def test_sys_exit_is_reported_not_fatal(make_repo, capsys):
+    repo = make_repo(
+        {"calc.py": "def check(x: int) -> int:\n"
+                    "    if x < 0:\n        raise ValueError\n    return x\n"},
+        {"calc.py": "import sys\n\ndef check(x: int) -> int:\n"
+                    "    if x < 0:\n        sys.exit(1)\n    return x\n"},
+    )
+    assert run(repo, "calc.py", "check") == 1
+    out = capsys.readouterr().out
+    assert "Version1 raised ValueError" in out
+    assert "Version2 called sys.exit(1)" in out
+
+
+def test_change_in_helper_imported_inside_function_is_caught(make_repo):
+    """The helper is imported when the function runs, not when the file loads."""
+    main_file = "def tidy(s: str) -> str:\n    from helpers import clean\n    return clean(s)\n"
+    repo = make_repo(
+        {"pkg/text.py": main_file, "pkg/helpers.py": "def clean(s):\n    return s.strip()\n"},
+        {"pkg/helpers.py": "def clean(s):\n    return s.strip(' ')\n"},
+    )
+    assert run(repo, "pkg/text.py", "tidy") == 1
+
+
+def test_global_state_is_not_shared_between_versions(make_repo):
+    """Both versions count their calls on a shared library module. In one
+    process they'd bump the same counter and seem to disagree."""
+    code = ("def count(x: int) -> int:\n    import json\n"
+            "    json.calls = getattr(json, 'calls', 0) + 1\n    return json.calls\n")
+    repo = make_repo({"calc.py": code}, {"calc.py": code + "\n# refactored\n"})
+    assert run(repo, "calc.py", "count") == 0
+
+
+def test_type_hint_of_user_class_needs_arg(make_repo, capsys):
+    code = "class Box:\n    pass\n\ndef f(b: Box) -> int:\n    return 1\n"
+    repo = make_repo({"calc.py": code}, {})
+    assert run(repo, "calc.py", "f") == 2
+    assert "--arg b=int" in capsys.readouterr().err
